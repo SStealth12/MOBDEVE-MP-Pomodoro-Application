@@ -79,7 +79,7 @@ class TaskFragment : Fragment() {
                     return@setPositiveButton
                 }
 
-                dbHelper.addTask(title, if (dueDate.isNotEmpty()) dueDate else null, type)
+                dbHelper.addTask(title, if (!dueDate.isNullOrEmpty()) dueDate else null, type)
                 taskAdapter.updateTasks(dbHelper.getAllTasks())
             }
             .setNegativeButton("Cancel", null)
@@ -111,7 +111,7 @@ class TaskFragment : Fragment() {
         editTextTitle.setText(task.title)
         if (task.dueDate != null) {
             editTextDueDate.tag = task.dueDate
-            editTextDueDate.setText(formatDueDateForDisplay(task.dueDate))
+            editTextDueDate.setText(formatDueDateForDisplay(task.dueDate!!))
         } else {
             editTextDueDate.setText("")
         }
@@ -133,7 +133,7 @@ class TaskFragment : Fragment() {
                 dbHelper.updateTask(
                     task.id,
                     updatedTitle,
-                    if (updatedDueDate.isNotEmpty()) updatedDueDate else null,
+                    if (!updatedDueDate.isNullOrEmpty()) updatedDueDate else null,
                     updatedType,
                     task.isCompleted // Preserve the original completion state
                 )

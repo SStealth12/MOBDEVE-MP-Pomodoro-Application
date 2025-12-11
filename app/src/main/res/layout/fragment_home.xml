@@ -88,7 +88,7 @@
 
             <Button
                 android:id="@+id/btnStart"
-                style="@style/Widget.MaterialComponents.Button.FilledTonalButton"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="8dp"
