@@ -113,6 +113,11 @@ class PomodoroService : Service() {
         totalCompletedSessions = sharedPreferences.getInt("total_pomodoro_count", 0)
         targetEndTime = sharedPreferences.getLong("state_target_end_time", 0L)
 
+        if (isRunning && targetEndTime == 0L) {
+            // Stale state (app killed mid-run) — clear running flag
+            isRunning = false
+        }
+
         if (isRunning && targetEndTime > 0L) {
             val remaining = (targetEndTime - System.currentTimeMillis()).coerceAtLeast(0L)
             isRunning = false
@@ -136,7 +141,7 @@ class PomodoroService : Service() {
     }
 
     private fun startTimer() {
-        if (isRunning) return
+        if (isRunning && timer != null) return
         if (timeLeftInMillis <= 0L) {
             timeLeftInMillis = getDurationForPhase(phase)
         }
