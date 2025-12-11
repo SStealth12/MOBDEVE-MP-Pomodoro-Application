@@ -11,6 +11,7 @@ import android.content.SharedPreferences
 import android.os.CountDownTimer
 import android.os.IBinder
 import android.media.MediaPlayer
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.google.gson.Gson
@@ -53,6 +54,7 @@ class PomodoroService : Service() {
     private var workSessionsSinceLongBreak = 0
     private var totalCompletedSessions = 0
     private val gson = Gson()
+    private val logTag = "PomodoroService"
 
     private var workEndAlarm: MediaPlayer? = null
     private var breakEndAlarm: MediaPlayer? = null
@@ -130,6 +132,7 @@ class PomodoroService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(logTag, "onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_START -> startTimer()
             ACTION_PAUSE -> pauseTimer()
@@ -158,12 +161,14 @@ class PomodoroService : Service() {
         timer = object : CountDownTimer(timeLeftInMillis, 1000) {
             override fun onTick(millisUntilFinished: Long) {
                 timeLeftInMillis = (endTime - System.currentTimeMillis()).coerceAtLeast(0L)
+                Log.d(logTag, "tick remaining=$timeLeftInMillis phase=$phase")
                 broadcastUpdate()
                 saveState()
                 updateNotification()
             }
 
             override fun onFinish() {
+                Log.d(logTag, "timer finish phase=$phase")
                 timeLeftInMillis = 0L
                 handleTimerFinish()
             }
@@ -230,6 +235,7 @@ class PomodoroService : Service() {
 
     private fun broadcastUpdate() {
         val intent = Intent(BROADCAST_UPDATE).apply {
+            `package` = packageName // limit broadcast to our app to avoid filters on newer SDKs
             putExtra(EXTRA_TIME_LEFT, timeLeftInMillis)
             putExtra(EXTRA_IS_RUNNING, isRunning)
             putExtra(EXTRA_IS_WORK_PHASE, phase == Phase.WORK)
