@@ -141,7 +141,6 @@ class PomodoroService : Service() {
     }
 
     private fun startTimer() {
-        if (isRunning && timer != null) return
         if (timeLeftInMillis <= 0L) {
             timeLeftInMillis = getDurationForPhase(phase)
         }
@@ -149,7 +148,12 @@ class PomodoroService : Service() {
         timer?.cancel()
         val endTime = System.currentTimeMillis() + timeLeftInMillis
         targetEndTime = endTime
-        val notification = buildNotification().build()
+        isRunning = true
+
+        // Start foreground immediately to satisfy API 34 timing requirements
+        startForeground(NOTIFICATION_ID, buildNotification().build())
+        broadcastUpdate()
+        saveState()
 
         timer = object : CountDownTimer(timeLeftInMillis, 1000) {
             override fun onTick(millisUntilFinished: Long) {
@@ -164,11 +168,6 @@ class PomodoroService : Service() {
                 handleTimerFinish()
             }
         }.start()
-
-        isRunning = true
-        broadcastUpdate()
-        startForeground(NOTIFICATION_ID, notification)
-        saveState()
     }
 
     private fun pauseTimer() {
