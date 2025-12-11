@@ -135,7 +135,6 @@ class PomodoroService : Service() {
         return START_STICKY
     }
 
-    @SuppressLint("ForegroundServiceType")
     private fun startTimer() {
         if (isRunning) return
         if (timeLeftInMillis <= 0L) {
