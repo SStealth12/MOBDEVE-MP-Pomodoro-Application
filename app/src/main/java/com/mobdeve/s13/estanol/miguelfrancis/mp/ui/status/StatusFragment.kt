@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import androidx.fragment.app.Fragment
+import androidx.core.content.ContextCompat
 import com.github.mikephil.charting.charts.BarChart
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.data.BarData
@@ -65,41 +66,102 @@ class StatusFragment : Fragment() {
 
     @SuppressLint("NewApi")
     private fun setupDailyGraph() {
-        val today = LocalDate.now().format(java.time.format.DateTimeFormatter.ISO_DATE)
-        val dailyPomodoroMapJson = sharedPreferences.getString("weekly_pomodoro_map", "{}")
-        val gson = Gson()
-        val map: Map<String, Int> = gson.fromJson(
-            dailyPomodoroMapJson,
-            object : TypeToken<Map<String, Int>>() {}.type
-        )
+        val today = LocalDate.now()
+        val history = loadHistory()
 
-        val todayCount = map[today] ?: 0
-        val entries = listOf(BarEntry(1f, todayCount.toFloat()))
+        val entries = mutableListOf<BarEntry>()
+        val labels = mutableListOf<String>()
 
-        val dataSet = BarDataSet(entries, "Pomodoro Sessions")
-        val data = BarData(dataSet)
+        for (i in 6 downTo 0) {
+            val date = today.minusDays(i.toLong())
+            labels.add(date.dayOfWeek.name.take(3))
+            val count = history[date] ?: 0
+            entries.add(BarEntry((6 - i).toFloat(), count.toFloat()))
+        }
 
-        binding.dailyChart.data = data
-        binding.dailyChart.invalidate()
+        val dataSet = BarDataSet(entries, "Last 7 days").apply {
+            color = ContextCompat.getColor(requireContext(), R.color.red_500)
+            valueTextSize = 10f
+            setDrawValues(true)
+        }
+        binding.dailyChart.apply {
+            data = BarData(dataSet)
+            description.isEnabled = false
+            legend.isEnabled = false
+            xAxis.apply {
+                granularity = 1f
+                setDrawGridLines(false)
+                valueFormatter = com.github.mikephil.charting.formatter.IndexAxisValueFormatter(labels)
+                textSize = 10f
+                position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
+            }
+            axisLeft.granularity = 1f
+            axisLeft.axisMinimum = 0f
+            axisRight.isEnabled = false
+            setTouchEnabled(false)
+            invalidate()
+        }
     }
 
     private fun setupWeeklyGraph() {
-        val weeklyPomodoroMapJson = sharedPreferences.getString("weekly_pomodoro_map", "{}")
-        val gson = Gson()
-        val map: Map<String, Int> = gson.fromJson(
-            weeklyPomodoroMapJson,
-            object : TypeToken<Map<String, Int>>() {}.type
-        )
+        val today = LocalDate.now()
+        val history = loadHistory()
 
-        val entries = map.entries.mapIndexed { index, entry ->
-            Entry(index.toFloat(), entry.value.toFloat())
+        val entries = mutableListOf<Entry>()
+        val labels = mutableListOf<String>()
+
+        for (weekIndex in 3 downTo 0) {
+            val start = today.minusDays(((weekIndex + 1) * 7 - 1).toLong())
+            val end = today.minusDays(weekIndex * 7L)
+
+            val total = history.filterKeys { date ->
+                !date.isBefore(start) && !date.isAfter(end)
+            }.values.sum()
+
+            labels.add(if (weekIndex == 0) "This week" else "Week -$weekIndex")
+            entries.add(Entry((3 - weekIndex).toFloat(), total.toFloat()))
         }
 
-        val dataSet = LineDataSet(entries, "Pomodoro Sessions")
-        val data = LineData(dataSet)
+        val dataSet = LineDataSet(entries, "Weekly total").apply {
+            color = ContextCompat.getColor(requireContext(), R.color.red_700)
+            circleRadius = 4f
+            setCircleColor(ContextCompat.getColor(requireContext(), R.color.red_500))
+            lineWidth = 2f
+            valueTextSize = 10f
+        }
 
-        binding.weeklyChart.data = data
-        binding.weeklyChart.invalidate()
+        binding.weeklyChart.apply {
+            data = LineData(dataSet)
+            description.isEnabled = false
+            legend.isEnabled = false
+            xAxis.apply {
+                granularity = 1f
+                valueFormatter = com.github.mikephil.charting.formatter.IndexAxisValueFormatter(labels)
+                textSize = 10f
+                position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
+                setDrawGridLines(false)
+            }
+            axisLeft.axisMinimum = 0f
+            axisLeft.granularity = 1f
+            axisRight.isEnabled = false
+            setTouchEnabled(false)
+            invalidate()
+        }
+    }
+
+    @SuppressLint("NewApi")
+    private fun loadHistory(): Map<LocalDate, Int> {
+        val mapJson = sharedPreferences.getString("session_history_map", "{}")
+        val gson = Gson()
+        val rawMap: Map<String, Int> = gson.fromJson(
+            mapJson,
+            object : TypeToken<Map<String, Int>>() {}.type
+        )
+        val parsed = mutableMapOf<LocalDate, Int>()
+        rawMap.forEach { (key, value) ->
+            runCatching { LocalDate.parse(key) }.getOrNull()?.let { parsed[it] = value }
+        }
+        return parsed
     }
 
     private val updateReceiver = object : BroadcastReceiver() {
@@ -110,11 +172,15 @@ class StatusFragment : Fragment() {
         }
     }
 
-    @SuppressLint("NewApi")
     override fun onStart() {
         super.onStart()
         val filter = IntentFilter(PomodoroService.BROADCAST_UPDATE)
-        requireContext().registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(
+            requireContext(),
+            updateReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     override fun onStop() {

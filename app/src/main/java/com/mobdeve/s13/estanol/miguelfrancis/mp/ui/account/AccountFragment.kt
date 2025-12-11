@@ -29,16 +29,16 @@ class AccountFragment : Fragment() {
     private fun setupSpinners(rootView: View) {
         val workDurationSpinner = rootView.findViewById<Spinner>(R.id.pomodoroLengthDropdown)
         val breakDurationSpinner = rootView.findViewById<Spinner>(R.id.shortBreakLengthDropdown)
+        val longBreakSpinner = rootView.findViewById<Spinner>(R.id.longBreakDropdown)
         val workAlarmSpinner = rootView.findViewById<Spinner>(R.id.pomodoroAlarmDropdown)
         val breakAlarmSpinner = rootView.findViewById<Spinner>(R.id.breakAlarmDropdown)
 
-        // Load current preferences and set the default selection
         workDurationSpinner.setSelection(sharedPreferences.getInt("work_duration_index", 5))
         breakDurationSpinner.setSelection(sharedPreferences.getInt("break_duration_index", 1))
+        longBreakSpinner.setSelection(sharedPreferences.getInt("long_break_duration_index", 3))
         workAlarmSpinner.setSelection(sharedPreferences.getInt("work_alarm", 0))
         breakAlarmSpinner.setSelection(sharedPreferences.getInt("break_alarm", 0))
 
-        // Save changes to SharedPreferences when a spinner item is selected
         workDurationSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 sharedPreferences.edit().putInt("work_duration_index", position).putInt("work_duration", positionToMinutes(position)).apply()
@@ -50,6 +50,14 @@ class AccountFragment : Fragment() {
         breakDurationSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 sharedPreferences.edit().putInt("break_duration_index", position).putInt("break_duration", positionToMinutes(position)).apply()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        longBreakSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                sharedPreferences.edit().putInt("long_break_duration_index", position).putInt("long_break_duration", positionToMinutes(position)).apply()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}

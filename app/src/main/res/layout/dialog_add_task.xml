@@ -16,8 +16,9 @@
         android:id="@+id/editTextTaskDueDate"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Due Date (Optional)"
-        android:inputType="date" />
+        android:focusable="false"
+        android:hint="Due Date &amp; Time (Optional)"
+        android:inputType="none" />
 
     <Spinner
         android:id="@+id/spinnerTaskType"

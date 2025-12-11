@@ -1,7 +1,10 @@
 package com.mobdeve.s13.estanol.miguelfrancis.mp.ui.task
 
 import android.app.AlertDialog
+import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.os.Bundle
+import android.text.InputType
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -15,8 +18,11 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.mobdeve.s13.estanol.miguelfrancis.mp.R
 import com.mobdeve.s13.estanol.miguelfrancis.mp.objects.Task
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
-class TaskFragment<Task> : Fragment() {
+class TaskFragment : Fragment() {
 
     private lateinit var taskAdapter: TaskAdapter
     private lateinit var dbHelper: TaskDatabaseHelper
@@ -52,6 +58,7 @@ class TaskFragment<Task> : Fragment() {
         val editTextTitle = dialogView.findViewById<EditText>(R.id.editTextTaskTitle)
         val editTextDueDate = dialogView.findViewById<EditText>(R.id.editTextTaskDueDate)
         val spinnerType = dialogView.findViewById<Spinner>(R.id.spinnerTaskType)
+        attachDateTimePicker(editTextDueDate)
 
         // Populate the spinner with task types
         val types = arrayOf("School", "Work", "None")
@@ -64,7 +71,7 @@ class TaskFragment<Task> : Fragment() {
             .setView(dialogView)
             .setPositiveButton("Add") { _, _ ->
                 val title = editTextTitle.text.toString().trim()
-                val dueDate = editTextDueDate.text.toString().trim()
+                val dueDate = (editTextDueDate.tag as? String)?.trim()
                 val type = spinnerType.selectedItem.toString()
 
                 if (title.isEmpty()) {
@@ -93,6 +100,7 @@ class TaskFragment<Task> : Fragment() {
         val editTextTitle = dialogView.findViewById<EditText>(R.id.editTextTaskTitle)
         val editTextDueDate = dialogView.findViewById<EditText>(R.id.editTextTaskDueDate)
         val spinnerType = dialogView.findViewById<Spinner>(R.id.spinnerTaskType)
+        attachDateTimePicker(editTextDueDate)
 
         // Populate the spinner
         val types = arrayOf("School", "Work", "None")
@@ -101,7 +109,12 @@ class TaskFragment<Task> : Fragment() {
 
         // Pre-fill data from the Task object
         editTextTitle.setText(task.title)
-        editTextDueDate.setText(task.dueDate ?: "")
+        if (task.dueDate != null) {
+            editTextDueDate.tag = task.dueDate
+            editTextDueDate.setText(formatDueDateForDisplay(task.dueDate))
+        } else {
+            editTextDueDate.setText("")
+        }
         spinnerType.setSelection(types.indexOf(task.type))
 
         val dialog = AlertDialog.Builder(requireContext())
@@ -109,7 +122,7 @@ class TaskFragment<Task> : Fragment() {
             .setView(dialogView)
             .setPositiveButton("Save") { _, _ ->
                 val updatedTitle = editTextTitle.text.toString().trim()
-                val updatedDueDate = editTextDueDate.text.toString().trim()
+                val updatedDueDate = (editTextDueDate.tag as? String)?.trim()
                 val updatedType = spinnerType.selectedItem.toString()
 
                 if (updatedTitle.isEmpty()) {
@@ -130,6 +143,56 @@ class TaskFragment<Task> : Fragment() {
             .create()
 
         dialog.show()
+    }
+
+    private fun attachDateTimePicker(target: EditText) {
+        target.inputType = InputType.TYPE_NULL
+        target.keyListener = null
+
+        val openPicker: () -> Unit = {
+            val now = Calendar.getInstance()
+            DatePickerDialog(
+                requireContext(),
+                { _, year, month, dayOfMonth ->
+                    val dateTime = Calendar.getInstance().apply {
+                        set(Calendar.YEAR, year)
+                        set(Calendar.MONTH, month)
+                        set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                    }
+
+                    TimePickerDialog(
+                        requireContext(),
+                        { _, hourOfDay, minute ->
+                            dateTime.set(Calendar.HOUR_OF_DAY, hourOfDay)
+                            dateTime.set(Calendar.MINUTE, minute)
+
+                            val displayFormat = SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault())
+                            val isoFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+                            target.tag = isoFormat.format(dateTime.time)
+                            target.setText(displayFormat.format(dateTime.time))
+                        },
+                        now.get(Calendar.HOUR_OF_DAY),
+                        now.get(Calendar.MINUTE),
+                        false
+                    ).show()
+                },
+                now.get(Calendar.YEAR),
+                now.get(Calendar.MONTH),
+                now.get(Calendar.DAY_OF_MONTH)
+            ).show()
+        }
+
+        target.setOnClickListener { openPicker() }
+        target.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) openPicker() }
+    }
+
+    private fun formatDueDateForDisplay(raw: String): String {
+        return runCatching {
+            val parser = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
+            val formatter = SimpleDateFormat("MMM dd, yyyy hh:mm a", Locale.getDefault())
+            val date = parser.parse(raw)
+            if (date != null) formatter.format(date) else raw
+        }.getOrDefault(raw)
     }
 
 

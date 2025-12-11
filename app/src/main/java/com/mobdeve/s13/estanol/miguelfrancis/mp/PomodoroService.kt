@@ -10,9 +10,9 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.CountDownTimer
 import android.os.IBinder
-import android.util.Log
-import androidx.core.app.NotificationCompat
 import android.media.MediaPlayer
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.time.LocalDate
@@ -21,24 +21,38 @@ import java.time.format.DateTimeFormatter
 class PomodoroService : Service() {
 
     companion object {
-        private const val DEFAULT_WORK_TIME: Long = 2 * 60 * 1000 // Default: 2 minutes in milliseconds
-        private const val DEFAULT_REST_TIME: Long = 1 * 60 * 1000 // Default: 1 minutes in milliseconds
+        private const val DEFAULT_WORK_TIME: Long = 25 * 60 * 1000
+        private const val DEFAULT_SHORT_BREAK_TIME: Long = 5 * 60 * 1000
+        private const val DEFAULT_LONG_BREAK_TIME: Long = 15 * 60 * 1000
+        private const val LONG_BREAK_INTERVAL = 4
 
         const val ACTION_START = "START"
         const val ACTION_PAUSE = "PAUSE"
         const val ACTION_STOP = "STOP"
+        const val ACTION_RESET = "RESET"
+        const val ACTION_STATUS = "STATUS"
         const val BROADCAST_UPDATE = "com.mobdeve.s13.estanol.miguelfrancis.mp.UPDATE"
         const val EXTRA_TIME_LEFT = "TIME_LEFT"
         const val EXTRA_IS_RUNNING = "IS_RUNNING"
         const val EXTRA_IS_WORK_PHASE = "IS_WORK_PHASE"
+        const val EXTRA_PHASE = "PHASE"
+        const val EXTRA_TOTAL_DURATION = "TOTAL_DURATION"
+        const val EXTRA_SESSION_COUNT = "SESSION_COUNT"
+        const val EXTRA_TOTAL_COMPLETED = "TOTAL_COMPLETED"
         const val NOTIFICATION_CHANNEL_ID = "pomodoro_timer_channel"
         const val NOTIFICATION_ID = 1
     }
 
+    private enum class Phase { WORK, SHORT_BREAK, LONG_BREAK }
+
     private var timer: CountDownTimer? = null
     private var isRunning = false
-    private var isWorkPhase = true // Indicates whether the current phase is work or rest
+    private var phase: Phase = Phase.WORK
     private var timeLeftInMillis: Long = DEFAULT_WORK_TIME
+    private var targetEndTime: Long = 0L
+    private var workSessionsSinceLongBreak = 0
+    private var totalCompletedSessions = 0
+    private val gson = Gson()
 
     private var workEndAlarm: MediaPlayer? = null
     private var breakEndAlarm: MediaPlayer? = null
@@ -52,11 +66,8 @@ class PomodoroService : Service() {
 
         sharedPreferences = getSharedPreferences("PomodoroSettings", Context.MODE_PRIVATE)
 
-        // Load user-selected alarm sounds
         loadAlarmSounds()
-
-        // Load default timer durations from preferences
-        timeLeftInMillis = getWorkDuration()
+        restoreState()
     }
 
     private fun loadAlarmSounds() {
@@ -72,105 +83,167 @@ class PomodoroService : Service() {
     }
 
     private fun getWorkDuration(): Long {
-        val minutes = sharedPreferences.getInt("work_duration", 1) // Default: 1 minutes
+        val minutes = sharedPreferences.getInt("work_duration", 25)
         return minutes * 60 * 1000L
     }
 
     private fun getRestDuration(): Long {
-        val minutes = sharedPreferences.getInt("break_duration", 1) // Default: 1 minutes
+        val minutes = sharedPreferences.getInt("break_duration", 5)
         return minutes * 60 * 1000L
     }
 
+    private fun getLongBreakDuration(): Long {
+        val minutes = sharedPreferences.getInt("long_break_duration", 15)
+        return minutes * 60 * 1000L
+    }
+
+    private fun getDurationForPhase(phase: Phase): Long = when (phase) {
+        Phase.WORK -> getWorkDuration()
+        Phase.SHORT_BREAK -> getRestDuration()
+        Phase.LONG_BREAK -> getLongBreakDuration()
+    }
+
+    private fun restoreState() {
+        phase = runCatching {
+            Phase.valueOf(sharedPreferences.getString("state_phase", Phase.WORK.name) ?: Phase.WORK.name)
+        }.getOrDefault(Phase.WORK)
+        timeLeftInMillis = sharedPreferences.getLong("state_time_left", getDurationForPhase(phase))
+        isRunning = sharedPreferences.getBoolean("state_is_running", false)
+        workSessionsSinceLongBreak = sharedPreferences.getInt("state_session_progress", 0)
+        totalCompletedSessions = sharedPreferences.getInt("total_pomodoro_count", 0)
+        targetEndTime = sharedPreferences.getLong("state_target_end_time", 0L)
+
+        if (isRunning && targetEndTime > 0L) {
+            val remaining = (targetEndTime - System.currentTimeMillis()).coerceAtLeast(0L)
+            isRunning = false
+            timeLeftInMillis = remaining
+            startTimer()
+        } else if (timeLeftInMillis <= 0L) {
+            timeLeftInMillis = getDurationForPhase(phase)
+            saveState()
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> startTimer()
             ACTION_PAUSE -> pauseTimer()
+            ACTION_RESET -> resetPhaseTimer()
             ACTION_STOP -> stopTimer()
+            ACTION_STATUS -> broadcastUpdate()
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     @SuppressLint("ForegroundServiceType")
     private fun startTimer() {
-        // Reset the timer if it has finished
-        timeLeftInMillis = if (timeLeftInMillis == 0L) {
-            if (isWorkPhase) getWorkDuration() else getRestDuration()
-        } else {
-            timeLeftInMillis
+        if (isRunning) return
+        if (timeLeftInMillis <= 0L) {
+            timeLeftInMillis = getDurationForPhase(phase)
         }
 
         timer?.cancel()
-        val notificationBuilder = createNotification()
-        val notification = notificationBuilder.build()
+        val endTime = System.currentTimeMillis() + timeLeftInMillis
+        targetEndTime = endTime
+        val notification = buildNotification().build()
 
         timer = object : CountDownTimer(timeLeftInMillis, 1000) {
             override fun onTick(millisUntilFinished: Long) {
-                timeLeftInMillis = millisUntilFinished
+                timeLeftInMillis = (endTime - System.currentTimeMillis()).coerceAtLeast(0L)
                 broadcastUpdate()
+                saveState()
                 updateNotification()
             }
 
             override fun onFinish() {
-                isRunning = false
-
-                // Play alarm based on the phase
-                if (isWorkPhase) {
-                    workEndAlarm?.start()
-                    updateStatsOnPomodoroCompletion() // Update stats on work phase completion
-                } else {
-                    breakEndAlarm?.start()
-                }
-
-                isWorkPhase = !isWorkPhase
-                timeLeftInMillis = if (isWorkPhase) getWorkDuration() else getRestDuration()
-
-                // Broadcast and notification updates
-                broadcastUpdate()
-                updateNotification()
+                timeLeftInMillis = 0L
+                handleTimerFinish()
             }
         }.start()
 
         isRunning = true
         broadcastUpdate()
         startForeground(NOTIFICATION_ID, notification)
+        saveState()
     }
 
     private fun pauseTimer() {
+        if (!isRunning) return
         timer?.cancel()
         isRunning = false
+        targetEndTime = 0L
         broadcastUpdate()
+        saveState()
+        updateNotification()
+    }
+
+    private fun resetPhaseTimer() {
+        timer?.cancel()
+        isRunning = false
+        targetEndTime = 0L
+        timeLeftInMillis = getDurationForPhase(phase)
+        broadcastUpdate()
+        saveState()
         updateNotification()
     }
 
     private fun stopTimer() {
         timer?.cancel()
         isRunning = false
-        isWorkPhase = true
-        timeLeftInMillis = getWorkDuration()
+        phase = Phase.WORK
+        workSessionsSinceLongBreak = 0
+        targetEndTime = 0L
+        timeLeftInMillis = getDurationForPhase(phase)
         broadcastUpdate()
+        saveState()
         stopForeground(true)
+        stopSelf()
     }
 
-    private fun switchPhase() {
-        isWorkPhase = !isWorkPhase
-        timeLeftInMillis = if (isWorkPhase) DEFAULT_WORK_TIME else DEFAULT_REST_TIME
-        broadcastUpdate() // Notify UI of phase change
+    private fun handleTimerFinish() {
+        isRunning = false
+        timer?.cancel()
+        targetEndTime = 0L
+
+        if (phase == Phase.WORK) {
+            workEndAlarm?.start()
+            workSessionsSinceLongBreak += 1
+            totalCompletedSessions += 1
+            updateStatsOnPomodoroCompletion()
+
+            val shouldLongBreak = workSessionsSinceLongBreak % LONG_BREAK_INTERVAL == 0
+            phase = if (shouldLongBreak) Phase.LONG_BREAK else Phase.SHORT_BREAK
+            if (shouldLongBreak) workSessionsSinceLongBreak = 0
+        } else {
+            breakEndAlarm?.start()
+            phase = Phase.WORK
+        }
+
+        timeLeftInMillis = getDurationForPhase(phase)
+        saveState()
+        broadcastUpdate()
+        updateNotification()
     }
 
     private fun broadcastUpdate() {
         val intent = Intent(BROADCAST_UPDATE).apply {
             putExtra(EXTRA_TIME_LEFT, timeLeftInMillis)
             putExtra(EXTRA_IS_RUNNING, isRunning)
-            putExtra(EXTRA_IS_WORK_PHASE, isWorkPhase)
+            putExtra(EXTRA_IS_WORK_PHASE, phase == Phase.WORK)
+            putExtra(EXTRA_PHASE, phase.name)
+            putExtra(EXTRA_TOTAL_DURATION, getDurationForPhase(phase))
+            putExtra(EXTRA_SESSION_COUNT, workSessionsSinceLongBreak)
+            putExtra(EXTRA_TOTAL_COMPLETED, totalCompletedSessions)
         }
         sendBroadcast(intent)
     }
 
-    private fun createNotification(): NotificationCompat.Builder {
+    private fun buildNotification(): NotificationCompat.Builder {
         val startIntent = Intent(this, PomodoroService::class.java).apply { action = ACTION_START }
         val pauseIntent = Intent(this, PomodoroService::class.java).apply { action = ACTION_PAUSE }
         val stopIntent = Intent(this, PomodoroService::class.java).apply { action = ACTION_STOP }
+        val resetIntent = Intent(this, PomodoroService::class.java).apply { action = ACTION_RESET }
+        val openAppIntent = Intent(this, MainActivity::class.java)
 
         val startPendingIntent = PendingIntent.getService(
             this, 0, startIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -181,26 +254,39 @@ class PomodoroService : Service() {
         val stopPendingIntent = PendingIntent.getService(
             this, 2, stopIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val resetPendingIntent = PendingIntent.getService(
+            this, 3, resetIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val contentIntent = PendingIntent.getActivity(
+            this, 4, openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
-        return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Pomodoro Timer")
-            .setContentText("Time remaining: ${formatTime(timeLeftInMillis)} (${if (isWorkPhase) "Work" else "Rest"})")
-            .setSmallIcon(R.drawable.ic_home_black_24dp) // Update with your icon resource
-            .addAction(R.drawable.ic_start, "Start", startPendingIntent)
-            .addAction(R.drawable.ic_pause, "Pause", pausePendingIntent)
-            .addAction(R.drawable.ic_stop, "Stop", stopPendingIntent)
+        val builder = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+            .setContentTitle("Pomodoro ${phaseLabel()}")
+            .setContentText("Time remaining: ${formatTime(timeLeftInMillis)}")
+            .setSmallIcon(R.drawable.ic_home_black_24dp)
+            .setContentIntent(contentIntent)
             .setOngoing(isRunning)
+            .setOnlyAlertOnce(true)
+
+        if (isRunning) {
+            builder.addAction(R.drawable.ic_pause, "Pause", pausePendingIntent)
+            builder.addAction(R.drawable.ic_stop, "Stop", stopPendingIntent)
+        } else {
+            builder.addAction(R.drawable.ic_start, "Start", startPendingIntent)
+            builder.addAction(R.drawable.ic_stop, "Reset", resetPendingIntent)
+        }
+
+        return builder
     }
 
     @SuppressLint("NotificationPermission")
     private fun updateNotification() {
-        val notification = createNotification()
-            .setContentText("Time remaining: ${formatTime(timeLeftInMillis)} (${if (isWorkPhase) "Work" else "Rest"})")
+        val notification = buildNotification()
+            .setContentText("Time remaining: ${formatTime(timeLeftInMillis)}")
             .build()
 
-        val notificationManager =
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.notify(NOTIFICATION_ID, notification)
+        NotificationManagerCompat.from(this).notify(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {
@@ -221,59 +307,53 @@ class PomodoroService : Service() {
         return String.format("%02d:%02d", minutes, seconds)
     }
 
+    private fun phaseLabel(): String = when (phase) {
+        Phase.WORK -> "Focus"
+        Phase.SHORT_BREAK -> "Break"
+        Phase.LONG_BREAK -> "Long Break"
+    }
+
+    private fun saveState() {
+        sharedPreferences.edit()
+            .putString("state_phase", phase.name)
+            .putLong("state_time_left", timeLeftInMillis)
+            .putBoolean("state_is_running", isRunning)
+            .putInt("state_session_progress", workSessionsSinceLongBreak)
+            .putLong("state_target_end_time", targetEndTime)
+            .putInt("total_pomodoro_count", totalCompletedSessions)
+            .apply()
+    }
+
     @SuppressLint("NewApi")
     private fun updateStatsOnPomodoroCompletion() {
         val editor = sharedPreferences.edit()
         val currentDate = LocalDate.now().format(DateTimeFormatter.ISO_DATE)
 
-        // Daily Pomodoro Count
-        val lastUpdatedDate = sharedPreferences.getString("last_updated_date", "")
-        var dailyCount = sharedPreferences.getInt("daily_pomodoro_count", 0)
-        if (lastUpdatedDate != currentDate) {
-            editor.putString("last_updated_date", currentDate)
-            editor.putInt("daily_pomodoro_count", 1) // Reset daily count for a new day
-        } else {
-            dailyCount += 1
-            editor.putInt("daily_pomodoro_count", dailyCount)
-        }
-
-        // Weekly Pomodoro Count
-        val weeklyPomodoroMap = sharedPreferences.getString("weekly_pomodoro_map", "{}")
-        val updatedMap = updateWeeklyPomodoroMap(weeklyPomodoroMap, currentDate)
-        editor.putString("weekly_pomodoro_map", updatedMap)
-        editor.putInt("weekly_pomodoro_count", calculateWeeklyCount(updatedMap))
-
-        // Apply changes
-        editor.apply()
-    }
-
-    @SuppressLint("NewApi")
-    private fun updateWeeklyPomodoroMap(mapJson: String?, currentDate: String): String {
-        val gson = Gson()
+        val mapJson = sharedPreferences.getString("session_history_map", "{}")
         val map: MutableMap<String, Int> = if (mapJson.isNullOrEmpty()) {
             mutableMapOf()
         } else {
             gson.fromJson(mapJson, object : TypeToken<MutableMap<String, Int>>() {}.type)
         }
 
-        // Add or increment today's entry
         map[currentDate] = (map[currentDate] ?: 0) + 1
 
-        // Remove entries older than 7 days
-        val sevenDaysAgo = LocalDate.now().minusDays(7)
-        map.entries.removeIf { (date, _) -> LocalDate.parse(date).isBefore(sevenDaysAgo) }
+        val cutoffDate = LocalDate.now().minusDays(27)
+        map.entries.removeIf { (date, _) -> LocalDate.parse(date).isBefore(cutoffDate) }
 
-        return gson.toJson(map)
-    }
+        val lastSevenCount = map
+            .filterKeys { key ->
+                val date = LocalDate.parse(key)
+                !date.isBefore(LocalDate.now().minusDays(6))
+            }
+            .values
+            .sum()
 
-    private fun calculateWeeklyCount(mapJson: String?): Int {
-        val gson = Gson()
-        val map: Map<String, Int> = if (mapJson.isNullOrEmpty()) {
-            emptyMap()
-        } else {
-            gson.fromJson(mapJson, object : TypeToken<Map<String, Int>>() {}.type)
-        }
-        return map.values.sum()
+        editor.putString("session_history_map", gson.toJson(map))
+        editor.putInt("daily_pomodoro_count", map[currentDate] ?: 0)
+        editor.putInt("weekly_pomodoro_count", lastSevenCount)
+        editor.putInt("total_pomodoro_count", totalCompletedSessions)
+        editor.apply()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -281,10 +361,8 @@ class PomodoroService : Service() {
     override fun onDestroy() {
         super.onDestroy()
 
-        // Cancel the timer to release resources
         timer?.cancel()
 
-        // Release MediaPlayer resources
         workEndAlarm?.release()
         workEndAlarm = null
 
